@@ -13,7 +13,7 @@ defaults:
     working-directory: ${{ github.workspace }}
 
 jobs:
-  build-and-push-pdf:
+  build-and-move-pdf:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
@@ -46,7 +46,7 @@ jobs:
             cd -
           done
 
-      - name: Push PDFs to main
+      - name: Push PDFs to Main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -55,14 +55,15 @@ jobs:
 
           git checkout main
           for file in ${{ steps.find_latex.outputs.files }}; do
-            dir=$(dirname "$file")
+            dir=$(dirname "$file" | cut -d'/' -f2-)
             base=$(basename "$file" .tex)
 
             pdf_file="$dir/$base.pdf"
 
+            # Ensure the directory structure exists in the main branch
             mkdir -p "$dir"
-            mv "$pdf_file" "$dir/"
 
+            mv "$file" "$dir/"
             git add "$dir/$base.pdf"
           done
 
