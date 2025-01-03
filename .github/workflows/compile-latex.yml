@@ -1,0 +1,67 @@
+name: Compile LaTeX and Update Main
+
+on:
+  pull_request:
+    types:
+      - closed
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ${{ github.workspace }}
+
+jobs:
+  build-and-push-pdf:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Identify LaTeX files
+        id: find_latex
+        run: |
+          latex_files=$(find . -type f -name '*.tex')
+          echo "::set-output name=files::$latex_files"
+
+      - name: Install LaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y texlive-full
+
+      - name: Compile LaTeX files to PDF
+        id: compile
+        run: |
+          for file in ${{ steps.find_latex.outputs.files }}; do
+            dir=$(dirname "$file")
+            base=$(basename "$file" .tex)
+
+            cd "$dir"
+            pdflatex "$base.tex" || exit 1
+            cd -
+          done
+
+      - name: Push PDFs to main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+
+          for file in ${{ steps.find_latex.outputs.files }}; do
+            dir=$(dirname "$file")
+            base=$(basename "$file" .tex)
+
+            pdf_file="$dir/$base.pdf"
+
+            git checkout main
+            mkdir -p "$dir"
+            mv "$pdf_file" "$dir/"
+
+            git add "$dir/$base.pdf"
+            git commit -m "Add compiled PDF for $file from PR #${{ github.event.pull_request.number }}"
+            git push
+          done
