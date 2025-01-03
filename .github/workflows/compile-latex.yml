@@ -1,71 +1,69 @@
-name: Compile LaTeX and Update Main
+name: Generate and Sync LaTeX PDF
 
 on:
   pull_request:
-    types:
-      - closed
     branches:
       - develop
-
-defaults:
-  run:
-    shell: bash
-    working-directory: ${{ github.workspace }}
+  push:
+    branches:
+      - main
 
 jobs:
-  build-and-move-pdf:
-    if: github.event.pull_request.merged == true
+  build-and-sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout the code
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+    # Step 1: Checkout the repository
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Identify LaTeX files
-        id: find_latex
-        run: |
-          latex_files=$(find . -type f -name '*.tex')
-          echo "::set-output name=files::$latex_files"
+    # Step 2: Identify the new folder with LaTeX file
+    - name: Find New Folder and LaTeX File
+      id: find_folder
+      run: |
+        # Find the newly added folder
+        NEW_FOLDER=$(git diff --name-only origin/develop...HEAD | grep -E '^src/2 - RTB/.+/' | cut -d/ -f1-4 | sort | uniq)
+        if [ -z "$NEW_FOLDER" ]; then
+          echo "No new folder found. Exiting."
+          exit 1
+        fi
+        echo "new_folder=$NEW_FOLDER" >> $GITHUB_ENV
 
-      - name: Install LaTeX
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y texlive-full
+        # Find the LaTeX file in the new folder
+        LATEX_FILE=$(find "$NEW_FOLDER" -type f -name "*.tex" | head -n 1)
+        if [ -z "$LATEX_FILE" ]; then
+          echo "No LaTeX file found in $NEW_FOLDER. Exiting."
+          exit 1
+        fi
+        echo "latex_file=$LATEX_FILE" >> $GITHUB_ENV
 
-      - name: Compile LaTeX files to PDF
-        id: compile
-        run: |
-          for file in ${{ steps.find_latex.outputs.files }}; do
-            dir=$(dirname "$file")
-            base=$(basename "$file" .tex)
+    # Step 3: Compile the LaTeX file
+    - name: Compile LaTeX to PDF
+      uses: xu-cheng/latex-action@v2
+      with:
+        root_file: ${{ env.latex_file }}
+        latexmk_use_lualatex: true  # Cambia se preferisci pdflatex
 
-            cd "$dir"
-            pdflatex "$base.tex" || exit 1
-            cd -
-          done
+    # Step 4: Move the PDF to the PDF folder in Develop
+    - name: Add PDF to Develop
+      if: github.event_name == 'pull_request'
+      run: |
+        PDF_FILE="${{ env.latex_file%.tex }}.pdf"
+        mv "$PDF_FILE" PDF/
+        git config --global user.name "${{ github.actor }}"
+        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+        git add PDF/
+        git commit -m "Add compiled PDF for PR #${{ github.event.pull_request.number }}"
+        git push origin develop
 
-      - name: Push PDFs to Main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-
-          git checkout main
-          for file in ${{ steps.find_latex.outputs.files }}; do
-            dir=$(dirname "$file" | cut -d'/' -f2-)
-            base=$(basename "$file" .tex)
-
-            pdf_file="$dir/$base.pdf"
-
-            # Ensure the directory structure exists in the main branch
-            mkdir -p "$dir"
-
-            mv "$file" "$dir/"
-            git add "$dir/$base.pdf"
-          done
-
-          git commit -m "Add compiled PDFs from PR #${{ github.event.pull_request.number }}"
-          git push
+    # Step 5: Sync the PDF to Main
+    - name: Sync PDF to Main
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        git config --global user.name "${{ github.actor }}"
+        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+        git checkout main
+        cp -r PDF/ PDF/
+        git add PDF/
+        git commit -m "Sync PDF to Main"
+        git push origin main
